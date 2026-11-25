@@ -413,4 +413,90 @@
           return !q || name.includes(q) || uid.includes(q);
         })
         .forEach(m => {
-          const displayName = m.full_name || m.name || "
+          const displayName = m.full_name || m.name || "Unknown";
+          const displayId = m.user_id || m.roll_no || "";
+          const displayDesig = m.designation || m.role || "";
+          const role = m.role || "STUDENT";
+
+          const row = document.createElement("div");
+          row.className = "member-row";
+          row.onclick = () => showProfile(m);
+          row.innerHTML = `
+            <div>
+              <div class="m-name">${escapeHtml(displayName)}</div>
+              <div class="m-id">${escapeHtml(displayId)}${displayId && displayDesig ? " • " : ""}${escapeHtml(displayDesig)}</div>
+            </div>
+            <span class="badge ${role === 'MENTOR' ? 'mentor' : ''}">${escapeHtml(role)}</span>
+          `;
+          list.appendChild(row);
+        });
+    }
+
+    function showProfileById(uid) {
+      const m = (Array.isArray(members) ? members : []).find(x => x && (x.user_id === uid || x.roll_no === uid));
+      if (m) showProfile(m);
+    }
+
+    function showProfile(m) {
+      if (!m) return;
+      const pane = document.getElementById("profile-pane");
+      pane.style.display = "flex";
+      const card = document.getElementById("selectedProfile");
+      card.style.display = "block";
+      const displayName = m.full_name || m.name || "Unknown";
+      const displayId = m.user_id || m.roll_no || "";
+      const role = m.role || "STUDENT";
+      card.innerHTML = `
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <strong style="font-size:14px;">${escapeHtml(displayName)}</strong>
+          <span class="badge ${role === 'MENTOR' ? 'mentor' : ''}">${escapeHtml(role)}</span>
+        </div>
+        <div class="p-label">Register / Faculty ID</div>
+        <div class="p-val">${escapeHtml(displayId)}</div>
+        <div class="p-label">Department & Batch</div>
+        <div class="p-val">M.Sc AI & DS (${escapeHtml(m.batch || "2026")})</div>
+        <div class="p-label">Designation</div>
+        <div class="p-val">${escapeHtml(m.designation || role)}</div>
+        <div class="privacy-pill">Phone Number: Protected (Not Stored)</div>
+      `;
+    }
+
+    function toggleProfilePane() {
+      const pane = document.getElementById("profile-pane");
+      pane.style.display = pane.style.display === "none" ? "flex" : "none";
+    }
+
+    function openModal() { document.getElementById("modalOverlay").style.display = "flex"; }
+    function closeModal() { document.getElementById("modalOverlay").style.display = "none"; }
+
+    async function submitNewGroup() {
+      const name = document.getElementById("newGroupName").value.trim();
+      const desc = document.getElementById("newGroupDesc").value.trim();
+      const mentorOnly = document.getElementById("mentorOnlyCheck").checked;
+      if (!name) return;
+
+      const res = await fetch("/api/groups", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          creator_id: currentUser ? currentUser.user_id : "",
+          group_name: name,
+          description: desc || "Classroom Group",
+          mentor_only_post: mentorOnly
+        })
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        document.getElementById("newGroupName").value = "";
+        document.getElementById("newGroupDesc").value = "";
+        document.getElementById("mentorOnlyCheck").checked = false;
+        closeModal();
+        if (data.group && data.group.group_id !== undefined) {
+          switchGroup(data.group.group_id);
+        }
+      }
+    }
+  </script>
+</body>
+</html>
