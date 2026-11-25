@@ -109,18 +109,31 @@ def init_db():
         ON messages (group_id, id)
     """)
 
-    seeded_rows = [
-        (uid, name, role, desig, batch, hash_secret(pwd))
-        for uid, name, role, desig, batch, pwd in RAW_ROSTER
-    ]
-
     cur.executemany(
         """
         INSERT OR IGNORE INTO users (user_id, full_name, role, designation, batch, password_hash)
         VALUES (?, ?, ?, ?, ?, ?)
         """,
-        seeded_rows,
+        [
+            (uid, name, role, desig, batch, hash_secret(pwd))
+            for uid, name, role, desig, batch, pwd in RAW_ROSTER
+        ],
     )
+
+    for uid, name, role, desig, batch, pwd in RAW_ROSTER:
+        clean_uid = uid.strip().upper()
+        cur.execute("SELECT password_hash FROM users WHERE UPPER(user_id) = ?", (clean_uid,))
+        existing = cur.fetchone()
+        if existing:
+            new_hash = existing["password_hash"] if verify_secret(pwd, existing["password_hash"]) else hash_secret(pwd)
+            cur.execute(
+                """
+                UPDATE users
+                SET full_name = ?, role = ?, designation = ?, batch = ?, password_hash = ?
+                WHERE UPPER(user_id) = ?
+                """,
+                (name, role, desig, batch, new_hash, clean_uid),
+            )
 
     cur.execute("SELECT COUNT(*) AS cnt FROM groups")
     if cur.fetchone()["cnt"] == 0:
@@ -137,6 +150,34 @@ def init_db():
 
     conn.commit()
     conn.close()
+
+
+def update_user_password(user_id: str, new_secret: str) -> bool:
+    clean_secret = (new_secret or "").strip()
+    if not clean_secret:
+        return False
+
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT role FROM users WHERE UPPER(user_id) = UPPER(?)", (user_id.strip(),))
+    row = cur.fetchone()
+    if not row:
+        conn.close()
+        return False
+
+    if row["role"] == "MENTOR" and not (clean_secret.isdigit() and len(clean_secret) == 7):
+        conn.close()
+        return False
+
+    new_hash = hash_secret(clean_secret)
+    cur.execute(
+        "UPDATE users SET password_hash = ? WHERE UPPER(user_id) = UPPER(?)",
+        (new_hash, user_id.strip()),
+    )
+    conn.commit()
+    updated = cur.rowcount > 0
+    conn.close()
+    return updated
 
 
 def authenticate_user(user_id: str, secret: str):
@@ -159,7 +200,6 @@ def authenticate_user(user_id: str, secret: str):
     user_dict = dict(row)
     stored_hash = user_dict.pop("password_hash")
 
-    # For mentors, enforce a strict 7-digit numeric code
     if user_dict["role"] == "MENTOR":
         clean_code = secret.strip()
         if not (clean_code.isdigit() and len(clean_code) == 7):
@@ -277,3 +317,4 @@ def get_group_messages(group_id: int, limit: int = 100):
     rows = [dict(r) for r in cur.fetchall()]
     conn.close()
     return rows
+```[cite: 5]
