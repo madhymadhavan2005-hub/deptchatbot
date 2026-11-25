@@ -135,7 +135,7 @@ def sanitize_filename(filename: str) -> str:
 
 @app.get("/", response_class=HTMLResponse)
 async def get_home(request: Request):
-    return templates.TemplateResponse("chat.html", {"request": request})
+    return templates.TemplateResponse(request, "chat.html")
 
 
 @app.post("/api/upload")
