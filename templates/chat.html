@@ -21,6 +21,7 @@
     .badge { font-size: 11px; padding: 3px 8px; border-radius: 12px; background: #005c4b; color: #e9edef; font-weight: 600; }
     .badge.mentor { background: #b45309; }
     #createGroupBtn { margin: 10px 12px; padding: 10px; border: none; border-radius: 8px; background: #00a884; color: #111b21; font-weight: bold; cursor: pointer; display: none; }
+    #resetPassBtn { margin: 0 12px 10px; padding: 9px; border: none; border-radius: 8px; background: #b45309; color: #fff; font-weight: bold; cursor: pointer; display: none; }
     #groupList { flex: 1; overflow-y: auto; }
     .group-item { padding: 13px 16px; border-bottom: 1px solid #1f2c33; cursor: pointer; transition: background 0.15s; }
     .group-item:hover { background: #202c33; }
@@ -67,7 +68,7 @@
     .p-val { font-size: 13px; font-weight: 600; }
     .privacy-pill { margin-top: 8px; font-size: 11px; background: #064e3b; color: #6ee7b7; padding: 4px 8px; border-radius: 4px; display: inline-block; }
 
-    #modalOverlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.7); justify-content: center; align-items: center; }
+    .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.7); justify-content: center; align-items: center; z-index: 20; }
     .modal { background: #202c33; padding: 22px; border-radius: 10px; width: 380px; }
     .modal input[type="text"] { width: 100%; padding: 10px; margin: 8px 0 12px; border-radius: 6px; border: 1px solid #3b4a54; background: #111b21; color: #fff; }
     .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 14px; }
@@ -100,6 +101,7 @@
         <span id="meRoleBadge" class="badge"></span>
       </div>
       <button id="createGroupBtn" onclick="openModal()">+ Create Classroom Group</button>
+      <button id="resetPassBtn" onclick="openPasswordModal()">🔑 Reset Student Password</button>
       <div id="groupList"></div>
     </div>
 
@@ -118,8 +120,8 @@
       </div>
       <div id="readonly-bar">Announcement Group: Only Dr. Ben M Jebin can send messages or files here.</div>
       <form id="composer" onsubmit="sendMessage(event)">
-        <input type="file" id="fileInput" accept=".png,.jpg,.jpeg,.webp,.pdf" style="display:none;" onchange="onFilePicked()" />
-        <button type="button" id="attachBtn" class="attach-btn" onclick="document.getElementById('fileInput').click()">📎 Photo / PDF</button>
+        <input type="file" id="fileInput" accept=".png,.jpg,.jpeg,.webp,.pdf,.doc,.docx,.ppt,.pptx,.txt,.md,.csv,.py,.ipynb,.zip" style="display:none;" onchange="onFilePicked()" />
+        <button type="button" id="attachBtn" class="attach-btn" onclick="document.getElementById('fileInput').click()">📎 Attach File</button>
         <input type="text" id="msgInput" placeholder="Message classroom group..." autocomplete="off" />
         <button type="submit">Send</button>
       </form>
@@ -136,7 +138,7 @@
     </div>
   </div>
 
-  <div id="modalOverlay">
+  <div id="modalOverlay" class="modal-overlay">
     <div class="modal">
       <h4 style="margin-top:0;">Create New Classroom Group</h4>
       <label style="font-size:12px; color:#aebac1;">Group Name</label>
@@ -148,8 +150,23 @@
         Mentor-only posting (Broadcast mode)
       </label>
       <div class="modal-actions">
-        <button class="btn-sec" onclick="closeModal()">Cancel</button>
-        <button class="btn-pri" onclick="submitNewGroup()">Create Group</button>
+        <button type="button" class="btn-sec" onclick="closeModal()">Cancel</button>
+        <button type="button" class="btn-pri" onclick="submitNewGroup()">Create Group</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="passModalOverlay" class="modal-overlay">
+    <div class="modal">
+      <h4 style="margin-top:0;">Update Student Password (DOB / Secret)</h4>
+      <label style="font-size:12px; color:#aebac1;">Student Register No.</label>
+      <input type="text" id="resetTargetId" placeholder="e.g. PRK26AD1005" style="text-transform:uppercase;" />
+      <label style="font-size:12px; color:#aebac1;">New Password / DOB (DDMMYYYY)</label>
+      <input type="text" id="resetNewSecret" placeholder="e.g. 14072005" />
+      <div id="passModalStatus" class="hint"></div>
+      <div class="modal-actions">
+        <button type="button" class="btn-sec" onclick="closePasswordModal()">Cancel</button>
+        <button type="button" class="btn-pri" onclick="submitPasswordReset()">Save Password</button>
       </div>
     </div>
   </div>
@@ -157,6 +174,7 @@
   <script>
     let socket = null;
     let currentUser = null;
+    let lastSecret = "";
     let groups = [];
     let members = [];
     let activeGroupId = null;
@@ -186,7 +204,9 @@
     function connectChat() {
       const uid = document.getElementById("userIdInput").value.trim().toUpperCase();
       const secret = document.getElementById("secretInput").value.trim();
+      lastSecret = secret;
       document.getElementById("errText").textContent = "";
+
       if (!uid || !secret) {
         document.getElementById("errText").textContent = "Please enter both your ID and password/code.";
         return;
@@ -230,11 +250,12 @@
         if (payload.type === "init") {
           currentUser = payload.user || null;
           groups = extractList(payload.groups, ["groups"]);
-          members = extractList(payload.members ?? payload.users ?? payload.profiles ?? payload, ["members", "users", "profiles"]);
+          members = extractList(payload.users ?? payload.members ?? payload.profiles ?? payload, ["users", "members", "profiles"]);
           activeGroupId = payload.active_group_id ?? (groups[0] ? groups[0].group_id : null);
 
           document.getElementById("login-box").style.display = "none";
           document.getElementById("app").style.display = "flex";
+
           if (currentUser) {
             document.getElementById("meName").textContent = currentUser.full_name || "";
             document.getElementById("meId").textContent = currentUser.user_id || "";
@@ -244,6 +265,7 @@
             if (currentUser.role === "MENTOR") {
               badge.classList.add("mentor");
               document.getElementById("createGroupBtn").style.display = "block";
+              document.getElementById("resetPassBtn").style.display = "block";
               document.getElementById("attachBtn").style.display = "inline-block";
             }
           }
@@ -253,13 +275,26 @@
           renderMembers();
           loadActiveGroupHeader();
           renderMessages(extractList(payload.messages, ["messages"]));
-        } else if (payload.type === "new_group" && payload.group) {
-          groups.push(payload.group);
-          renderGroups();
-        } else if (payload.type === "message" && payload.data) {
-          if (payload.data.group_id === activeGroupId) {
-            appendMessage(payload.data);
+        } else if (payload.type === "group_history") {
+          if (payload.group_id === activeGroupId) {
+            renderMessages(extractList(payload.messages, ["messages"]));
           }
+        } else if (payload.type === "group_created") {
+          if (Array.isArray(payload.groups)) {
+            groups = payload.groups;
+          } else if (payload.group) {
+            groups.push(payload.group);
+          }
+          renderGroups();
+          loadActiveGroupHeader();
+        } else if (payload.type === "new_message" && payload.message) {
+          if (payload.message.group_id === activeGroupId) {
+            appendMessage(payload.message);
+          }
+        } else if (payload.type === "users_list") {
+          members = extractList(payload.users, ["users"]);
+          updateMemberCountLabel();
+          renderMembers();
         }
       };
     }
@@ -314,16 +349,8 @@
       activeGroupId = groupId;
       renderGroups();
       loadActiveGroupHeader();
-      try {
-        const res = await fetch(`/api/groups/${encodeURIComponent(groupId)}/messages`);
-        if (!res.ok) {
-          renderMessages([]);
-          return;
-        }
-        const data = await res.json();
-        renderMessages(extractList(data, ["messages"]));
-      } catch {
-        renderMessages([]);
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: "switch_group", group_id: groupId }));
       }
     }
 
@@ -338,15 +365,16 @@
       if (!m || !m.attachment_url) return "";
       const safeUrl = escapeHtml(m.attachment_url);
       const safeName = escapeHtml(m.attachment_name || "Document");
-      if (safeUrl.toLowerCase().endsWith(".pdf")) {
-        return `
-          <div class="pdf-card">
-            <span>📄 ${safeName}</span>
-            <a href="${safeUrl}" target="_blank" rel="noopener noreferrer">Open / Download PDF</a>
-          </div>
-        `;
+      const lower = safeUrl.toLowerCase();
+      if (lower.endsWith(".png") || lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".webp") || lower.endsWith(".gif")) {
+        return `<a class="att-link" href="${safeUrl}" target="_blank" rel="noopener noreferrer"><img class="att-img" src="${safeUrl}" alt="${safeName}" /></a>`;
       }
-      return `<a class="att-link" href="${safeUrl}" target="_blank" rel="noopener noreferrer"><img class="att-img" src="${safeUrl}" alt="${safeName}" /></a>`;
+      return `
+        <div class="pdf-card">
+          <span>📄 ${safeName}</span>
+          <a href="${safeUrl}" target="_blank" rel="noopener noreferrer">Open / Download</a>
+        </div>
+      `;
     }
 
     function appendMessage(m) {
@@ -372,20 +400,30 @@
 
       if (selectedFile) {
         const formData = new FormData();
-        formData.append("sender_id", currentUser ? currentUser.user_id : "");
-        formData.append("group_id", String(activeGroupId));
-        formData.append("caption", text);
+        formData.append("user_id", currentUser ? currentUser.user_id : "");
+        formData.append("secret", lastSecret);
         formData.append("file", selectedFile);
 
-        const res = await fetch("/api/upload", { method: "POST", body: formData });
-        if (!res.ok) {
+        const uploadRes = await fetch("/api/upload", { method: "POST", body: formData });
+        if (!uploadRes.ok) {
           let errMsg = "Upload failed";
           try {
-            const err = await res.json();
+            const err = await uploadRes.json();
             errMsg = err.detail || errMsg;
           } catch {}
           alert(errMsg);
           return;
+        }
+
+        const uploaded = await uploadRes.json();
+        if (socket && socket.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({
+            type: "chat_message",
+            group_id: activeGroupId,
+            content: text || `Shared attachment: ${uploaded.attachment_name}`,
+            attachment_url: uploaded.attachment_url,
+            attachment_name: uploaded.attachment_name,
+          }));
         }
         input.value = "";
         clearSelectedFile();
@@ -393,7 +431,11 @@
       }
 
       if (!text || !socket || socket.readyState !== WebSocket.OPEN) return;
-      socket.send(JSON.stringify({ group_id: activeGroupId, content: text }));
+      socket.send(JSON.stringify({
+        type: "chat_message",
+        group_id: activeGroupId,
+        content: text,
+      }));
       input.value = "";
     }
 
@@ -469,33 +511,69 @@
     function openModal() { document.getElementById("modalOverlay").style.display = "flex"; }
     function closeModal() { document.getElementById("modalOverlay").style.display = "none"; }
 
-    async function submitNewGroup() {
+    function submitNewGroup() {
       const name = document.getElementById("newGroupName").value.trim();
       const desc = document.getElementById("newGroupDesc").value.trim();
       const mentorOnly = document.getElementById("mentorOnlyCheck").checked;
-      if (!name) return;
+      if (!name || !socket || socket.readyState !== WebSocket.OPEN) return;
 
-      const res = await fetch("/api/groups", {
+      socket.send(JSON.stringify({
+        type: "create_group",
+        group_name: name,
+        description: desc || "Classroom Group",
+        mentor_only_post: mentorOnly
+      }));
+
+      document.getElementById("newGroupName").value = "";
+      document.getElementById("newGroupDesc").value = "";
+      document.getElementById("mentorOnlyCheck").checked = false;
+      closeModal();
+    }
+
+    function openPasswordModal() {
+      const statusEl = document.getElementById("passModalStatus");
+      statusEl.style.color = "#8696a0";
+      statusEl.textContent = "";
+      document.getElementById("passModalOverlay").style.display = "flex";
+    }
+
+    function closePasswordModal() {
+      document.getElementById("passModalOverlay").style.display = "none";
+    }
+
+    async function submitPasswordReset() {
+      const targetUserId = document.getElementById("resetTargetId").value.trim().toUpperCase();
+      const newSecret = document.getElementById("resetNewSecret").value.trim();
+      const statusEl = document.getElementById("passModalStatus");
+
+      if (!targetUserId || !newSecret) {
+        statusEl.style.color = "#f87171";
+        statusEl.textContent = "Enter both Register No. and new password/DOB.";
+        return;
+      }
+
+      const res = await fetch("/api/users/password", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          creator_id: currentUser ? currentUser.user_id : "",
-          group_name: name,
-          description: desc || "Classroom Group",
-          mentor_only_post: mentorOnly
-        })
+          mentor_id: currentUser ? currentUser.user_id : "",
+          mentor_secret: lastSecret,
+          target_user_id: targetUserId,
+          new_secret: newSecret,
+        }),
       });
 
-      if (res.ok) {
-        const data = await res.json();
-        document.getElementById("newGroupName").value = "";
-        document.getElementById("newGroupDesc").value = "";
-        document.getElementById("mentorOnlyCheck").checked = false;
-        closeModal();
-        if (data.group && data.group.group_id !== undefined) {
-          switchGroup(data.group.group_id);
-        }
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        statusEl.style.color = "#f87171";
+        statusEl.textContent = data.detail || "Could not update password.";
+        return;
       }
+
+      statusEl.style.color = "#6ee7b7";
+      statusEl.textContent = data.message || "Password updated.";
+      document.getElementById("resetTargetId").value = "";
+      document.getElementById("resetNewSecret").value = "";
     }
   </script>
 </body>
