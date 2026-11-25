@@ -317,4 +317,4 @@ def get_group_messages(group_id: int, limit: int = 100):
     rows = [dict(r) for r in cur.fetchall()]
     conn.close()
     return rows
-```[cite: 5]
+[cite: 5]
