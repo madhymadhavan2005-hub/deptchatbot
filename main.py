@@ -6,10 +6,11 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Dict, List
 
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, Form, HTTPException, Request, Response, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from pydantic import BaseModel
 
 from database import (
     authenticate_user,
@@ -21,6 +22,7 @@ from database import (
     get_user,
     init_db,
     save_message,
+    update_user_password,
 )
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -35,6 +37,13 @@ ALLOWED_EXTENSIONS = {
     ".txt", ".md", ".csv", ".py", ".ipynb",
     ".png", ".jpg", ".jpeg", ".webp", ".gif", ".zip"
 }
+
+
+class PasswordResetRequest(BaseModel):
+    mentor_id: str
+    mentor_secret: str
+    target_user_id: str
+    new_secret: str
 
 
 @asynccontextmanager
@@ -136,6 +145,32 @@ def sanitize_filename(filename: str) -> str:
 @app.get("/", response_class=HTMLResponse)
 async def get_home(request: Request):
     return templates.TemplateResponse(request, "chat.html")
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    return Response(status_code=204)
+
+
+@app.post("/api/users/password")
+async def reset_user_password(payload: PasswordResetRequest):
+    mentor = authenticate_user(payload.mentor_id, payload.mentor_secret)
+    if not mentor or mentor.get("role") != "MENTOR":
+        raise HTTPException(status_code=403, detail="Only mentors can update passwords.")
+
+    target_uid = (payload.target_user_id or "").strip().upper()
+    new_secret = (payload.new_secret or "").strip()
+    if not target_uid or not new_secret:
+        raise HTTPException(status_code=400, detail="Student ID and new password/DOB are required.")
+
+    if target_uid == mentor["user_id"] and not (new_secret.isdigit() and len(new_secret) == 7):
+        raise HTTPException(status_code=400, detail="Mentor code must be a 7-digit number.")
+
+    updated = update_user_password(target_uid, new_secret)
+    if not updated:
+        raise HTTPException(status_code=404, detail="User not found or password format invalid.")
+
+    return {"status": "ok", "user_id": target_uid, "message": f"Password updated for {target_uid}."}
 
 
 @app.post("/api/upload")
@@ -307,7 +342,6 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                     "message": saved,
                 })
 
-                # Optional @bot assistant in non-read-only groups
                 if content and "@bot" in content.lower() and not grp["mentor_only_post"]:
                     bot_reply_text = generate_bot_reply(content, user["full_name"])
                     bot_saved = save_message(
