@@ -109,7 +109,7 @@
           <div id="activeGroupName" style="font-weight:bold; font-size:15px;"></div>
           <div id="activeGroupDesc" style="font-size:12px; color:#8696a0;"></div>
         </div>
-        <button class="members-btn" onclick="toggleProfilePane()">Class Profiles (28)</button>
+        <button id="membersBtn" class="members-btn" onclick="toggleProfilePane()">Class Profiles (28)</button>
       </div>
       <div id="messages"></div>
       <div id="file-chip-bar">
@@ -163,7 +163,24 @@
     let selectedFile = null;
 
     function escapeHtml(str) {
-      return String(str).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+      return String(str ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    }
+
+    function extractList(raw, keys) {
+      if (Array.isArray(raw)) return raw;
+      if (raw && typeof raw === "object") {
+        for (const k of keys) {
+          if (Array.isArray(raw[k])) return raw[k];
+        }
+      }
+      return [];
+    }
+
+    function updateMemberCountLabel() {
+      const btn = document.getElementById("membersBtn");
+      if (btn && Array.isArray(members) && members.length > 0) {
+        btn.textContent = `Class Profiles (${members.length})`;
+      }
     }
 
     function connectChat() {
@@ -194,9 +211,16 @@
       };
 
       socket.onmessage = (event) => {
-        const payload = JSON.parse(event.data);
+        let payload;
+        try {
+          payload = JSON.parse(event.data);
+        } catch {
+          return;
+        }
+        if (!payload || typeof payload !== "object") return;
+
         if (payload.type === "error") {
-          document.getElementById("errText").textContent = payload.message;
+          document.getElementById("errText").textContent = payload.message || "Authentication failed.";
           return;
         }
         if (payload.type === "notice") {
@@ -204,32 +228,35 @@
           return;
         }
         if (payload.type === "init") {
-          currentUser = payload.user;
-          groups = payload.groups;
-          members = payload.members;
-          activeGroupId = payload.active_group_id;
+          currentUser = payload.user || null;
+          groups = extractList(payload.groups, ["groups"]);
+          members = extractList(payload.members ?? payload.users ?? payload.profiles ?? payload, ["members", "users", "profiles"]);
+          activeGroupId = payload.active_group_id ?? (groups[0] ? groups[0].group_id : null);
 
           document.getElementById("login-box").style.display = "none";
           document.getElementById("app").style.display = "flex";
-          document.getElementById("meName").textContent = currentUser.full_name;
-          document.getElementById("meId").textContent = currentUser.user_id;
+          if (currentUser) {
+            document.getElementById("meName").textContent = currentUser.full_name || "";
+            document.getElementById("meId").textContent = currentUser.user_id || "";
 
-          const badge = document.getElementById("meRoleBadge");
-          badge.textContent = currentUser.role;
-          if (currentUser.role === "MENTOR") {
-            badge.classList.add("mentor");
-            document.getElementById("createGroupBtn").style.display = "block";
-            document.getElementById("attachBtn").style.display = "inline-block";
+            const badge = document.getElementById("meRoleBadge");
+            badge.textContent = currentUser.role || "STUDENT";
+            if (currentUser.role === "MENTOR") {
+              badge.classList.add("mentor");
+              document.getElementById("createGroupBtn").style.display = "block";
+              document.getElementById("attachBtn").style.display = "inline-block";
+            }
           }
 
+          updateMemberCountLabel();
           renderGroups();
           renderMembers();
           loadActiveGroupHeader();
-          renderMessages(payload.messages);
-        } else if (payload.type === "new_group") {
+          renderMessages(extractList(payload.messages, ["messages"]));
+        } else if (payload.type === "new_group" && payload.group) {
           groups.push(payload.group);
           renderGroups();
-        } else if (payload.type === "message") {
+        } else if (payload.type === "message" && payload.data) {
           if (payload.data.group_id === activeGroupId) {
             appendMessage(payload.data);
           }
@@ -254,8 +281,9 @@
 
     function renderGroups() {
       const list = document.getElementById("groupList");
+      if (!list) return;
       list.innerHTML = "";
-      groups.forEach(g => {
+      (Array.isArray(groups) ? groups : []).forEach(g => {
         const div = document.createElement("div");
         div.className = "group-item" + (g.group_id === activeGroupId ? " active" : "");
         div.onclick = () => switchGroup(g.group_id);
@@ -271,12 +299,12 @@
     }
 
     function loadActiveGroupHeader() {
-      const grp = groups.find(g => g.group_id === activeGroupId);
+      const grp = (Array.isArray(groups) ? groups : []).find(g => g.group_id === activeGroupId);
       if (!grp) return;
-      document.getElementById("activeGroupName").textContent = grp.group_name;
-      document.getElementById("activeGroupDesc").textContent = grp.description;
+      document.getElementById("activeGroupName").textContent = grp.group_name || "";
+      document.getElementById("activeGroupDesc").textContent = grp.description || "";
 
-      const isLockedForStudent = grp.mentor_only_post === 1 && currentUser.role !== "MENTOR";
+      const isLockedForStudent = grp.mentor_only_post === 1 && (!currentUser || currentUser.role !== "MENTOR");
       document.getElementById("composer").style.display = isLockedForStudent ? "none" : "flex";
       document.getElementById("readonly-bar").style.display = isLockedForStudent ? "block" : "none";
       if (isLockedForStudent) clearSelectedFile();
@@ -286,19 +314,28 @@
       activeGroupId = groupId;
       renderGroups();
       loadActiveGroupHeader();
-      const res = await fetch(`/api/groups/${groupId}/messages`);
-      const data = await res.json();
-      renderMessages(data.messages);
+      try {
+        const res = await fetch(`/api/groups/${encodeURIComponent(groupId)}/messages`);
+        if (!res.ok) {
+          renderMessages([]);
+          return;
+        }
+        const data = await res.json();
+        renderMessages(extractList(data, ["messages"]));
+      } catch {
+        renderMessages([]);
+      }
     }
 
     function renderMessages(msgs) {
       const box = document.getElementById("messages");
+      if (!box) return;
       box.innerHTML = "";
-      msgs.forEach(appendMessage);
+      (Array.isArray(msgs) ? msgs : []).forEach(appendMessage);
     }
 
     function renderAttachmentHtml(m) {
-      if (!m.attachment_url) return "";
+      if (!m || !m.attachment_url) return "";
       const safeUrl = escapeHtml(m.attachment_url);
       const safeName = escapeHtml(m.attachment_name || "Document");
       if (safeUrl.toLowerCase().endsWith(".pdf")) {
@@ -313,7 +350,9 @@
     }
 
     function appendMessage(m) {
+      if (!m) return;
       const box = document.getElementById("messages");
+      if (!box) return;
       const div = document.createElement("div");
       const isMine = currentUser && m.sender_id === currentUser.user_id;
       div.className = "msg" + (isMine ? " mine" : "") + (m.sender_role === "MENTOR" ? " mentor" : "") + (m.sender_role === "BOT" ? " bot" : "");
@@ -333,15 +372,19 @@
 
       if (selectedFile) {
         const formData = new FormData();
-        formData.append("sender_id", currentUser.user_id);
+        formData.append("sender_id", currentUser ? currentUser.user_id : "");
         formData.append("group_id", String(activeGroupId));
         formData.append("caption", text);
         formData.append("file", selectedFile);
 
         const res = await fetch("/api/upload", { method: "POST", body: formData });
         if (!res.ok) {
-          const err = await res.json();
-          alert(err.detail || "Upload failed");
+          let errMsg = "Upload failed";
+          try {
+            const err = await res.json();
+            errMsg = err.detail || errMsg;
+          } catch {}
+          alert(errMsg);
           return;
         }
         input.value = "";
@@ -355,85 +398,19 @@
     }
 
     function renderMembers() {
-      const q = document.getElementById("memberSearch").value.trim().toLowerCase();
+      const searchEl = document.getElementById("memberSearch");
+      const q = (searchEl ? searchEl.value : "").trim().toLowerCase();
       const list = document.getElementById("memberList");
+      if (!list) return;
       list.innerHTML = "";
-      members
-        .filter(m => m.full_name.toLowerCase().includes(q) || m.user_id.toLowerCase().includes(q))
-        .forEach(m => {
-          const row = document.createElement("div");
-          row.className = "member-row";
-          row.onclick = () => showProfile(m);
-          row.innerHTML = `
-            <div>
-              <div class="m-name">${escapeHtml(m.full_name)}</div>
-              <div class="m-id">${escapeHtml(m.user_id)} • ${escapeHtml(m.designation)}</div>
-            </div>
-            <span class="badge ${m.role === 'MENTOR' ? 'mentor' : ''}">${m.role}</span>
-          `;
-          list.appendChild(row);
-        });
-    }
 
-    function showProfileById(uid) {
-      const m = members.find(x => x.user_id === uid);
-      if (m) showProfile(m);
-    }
-
-    function showProfile(m) {
-      const pane = document.getElementById("profile-pane");
-      pane.style.display = "flex";
-      const card = document.getElementById("selectedProfile");
-      card.style.display = "block";
-      card.innerHTML = `
-        <div style="display:flex; justify-content:space-between; align-items:center;">
-          <strong style="font-size:14px;">${escapeHtml(m.full_name)}</strong>
-          <span class="badge ${m.role === 'MENTOR' ? 'mentor' : ''}">${m.role}</span>
-        </div>
-        <div class="p-label">Register / Faculty ID</div>
-        <div class="p-val">${escapeHtml(m.user_id)}</div>
-        <div class="p-label">Department & Batch</div>
-        <div class="p-val">M.Sc AI & DS (${escapeHtml(m.batch)})</div>
-        <div class="p-label">Designation</div>
-        <div class="p-val">${escapeHtml(m.designation)}</div>
-        <div class="privacy-pill">Phone Number: Protected (Not Stored)</div>
-      `;
-    }
-
-    function toggleProfilePane() {
-      const pane = document.getElementById("profile-pane");
-      pane.style.display = pane.style.display === "none" ? "flex" : "none";
-    }
-
-    function openModal() { document.getElementById("modalOverlay").style.display = "flex"; }
-    function closeModal() { document.getElementById("modalOverlay").style.display = "none"; }
-
-    async function submitNewGroup() {
-      const name = document.getElementById("newGroupName").value.trim();
-      const desc = document.getElementById("newGroupDesc").value.trim();
-      const mentorOnly = document.getElementById("mentorOnlyCheck").checked;
-      if (!name) return;
-
-      const res = await fetch("/api/groups", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          creator_id: currentUser.user_id,
-          group_name: name,
-          description: desc || "Classroom Group",
-          mentor_only_post: mentorOnly
+      const safeMembers = Array.isArray(members) ? members : [];
+      safeMembers
+        .filter(m => {
+          if (!m) return false;
+          const name = String(m.full_name || m.name || "").toLowerCase();
+          const uid = String(m.user_id || m.roll_no || "").toLowerCase();
+          return !q || name.includes(q) || uid.includes(q);
         })
-      });
-
-      if (res.ok) {
-        const data = await res.json();
-        document.getElementById("newGroupName").value = "";
-        document.getElementById("newGroupDesc").value = "";
-        document.getElementById("mentorOnlyCheck").checked = false;
-        closeModal();
-        switchGroup(data.group.group_id);
-      }
-    }
-  </script>
-</body>
-</html>
+        .forEach(m => {
+          const displayName = m.full_name || m.name || "
